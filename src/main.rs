@@ -1,21 +1,18 @@
 use rdev::{grab, simulate, Event, EventType, Key};
 use std::rc::Rc;
 use std::sync::Mutex;
-use std::thread;
-use std::time::{self, Duration, Instant};
-
-// use std::process::Command;
+// use std::thread;
 
 #[derive(Debug)]
 struct CapsState {
-    pressed_down_at: Instant,
     is_pressed_down: bool,
+    something_else_was_pressed: bool,
 }
 
 fn main() {
     let snapshot = Rc::new(Mutex::new(CapsState {
-        pressed_down_at: Instant::now(),
         is_pressed_down: false,
+        something_else_was_pressed: false,
     }));
     // This will block.
     if let Err(error) = grab(move |event| callback(event, snapshot.clone())) {
@@ -35,16 +32,13 @@ fn send(event_type: &EventType) {
     // thread::sleep(delay);
 }
 
-fn callback(event: Event, snapshot: Rc<Mutex<CapsState>>) -> Option<Event> {
+fn callback(event: Event, caps_state: Rc<Mutex<CapsState>>) -> Option<Event> {
     match event.event_type {
         EventType::KeyPress(Key::CapsLock) => {
-            let mut locked_snapshot = snapshot.lock().unwrap();
+            let mut locked_caps_state = caps_state.lock().unwrap();
 
-            if !locked_snapshot.is_pressed_down {
-                locked_snapshot.pressed_down_at = Instant::now();
-                locked_snapshot.is_pressed_down = true;
-
-                send(&EventType::KeyPress(Key::MetaLeft));
+            if !locked_caps_state.is_pressed_down {
+                locked_caps_state.is_pressed_down = true;
             }
 
             return None;
@@ -52,21 +46,44 @@ fn callback(event: Event, snapshot: Rc<Mutex<CapsState>>) -> Option<Event> {
         EventType::KeyRelease(Key::CapsLock) => {
             send(&EventType::KeyRelease(Key::MetaLeft));
 
-            let mut locked_snapshot = snapshot.lock().unwrap();
+            let mut locked_caps_state = caps_state.lock().unwrap();
 
-            locked_snapshot.is_pressed_down = false;
-
-            let time_elapsed_since_pressed_down = locked_snapshot.pressed_down_at.elapsed();
-
-            if time_elapsed_since_pressed_down < Duration::from_millis(176) {
+            if locked_caps_state.something_else_was_pressed {
+                send(&EventType::KeyRelease(Key::MetaLeft));
+            } else {
+                println!("{:#?}", locked_caps_state);
                 send(&EventType::KeyPress(Key::Escape));
                 send(&EventType::KeyRelease(Key::Escape));
-                println!("Just a keypress");
-            } else {
-                println!("Held Down");
             }
 
+            locked_caps_state.is_pressed_down = false;
+            locked_caps_state.something_else_was_pressed = false;
+
             return None;
+        }
+        EventType::KeyPress(key) => {
+            let mut locked_caps_state = caps_state.lock().unwrap();
+
+            if locked_caps_state.is_pressed_down {
+                send(&EventType::KeyPress(Key::MetaLeft));
+                send(&EventType::KeyPress(key));
+                if key != Key::CapsLock {
+                    locked_caps_state.something_else_was_pressed = true;
+                }
+                return None;
+            } else {
+                return Some(event);
+            }
+        }
+        EventType::KeyRelease(key) => {
+            let locked_caps_state = caps_state.lock().unwrap();
+            send(&EventType::KeyRelease(key));
+
+            if locked_caps_state.is_pressed_down {
+                return None;
+            } else {
+                return Some(event);
+            }
         }
         _ => Some(event),
     }
